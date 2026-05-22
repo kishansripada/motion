@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@source "../../src/**/*.{ts,tsx}";
+@source "../../animations/**/*.{ts,tsx,html}";
+
+@theme {
+   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+
+   --color-motion-canvas: #000000;
+   --color-motion-foreground: #fafafa;
+   --color-motion-muted: rgba(250, 250, 250, 0.46);
+   --color-motion-border: rgba(255, 255, 255, 0.22);
+   --color-motion-border-soft: rgba(255, 255, 255, 0.1);
+   --color-motion-surface: rgba(255, 255, 255, 0.025);
+   --color-motion-surface-strong: rgba(255, 255, 255, 0.06);
+   --color-motion-accent: #3b82f6;
+}
+
+@layer base {
+   html,
+   body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--color-motion-canvas);
+      color: var(--color-motion-foreground);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+   }
+
+   body {
+      font-variant-ligatures: none;
+   }
+
+   @keyframes aut-blink {
+      0%,
+      50% {
+         opacity: 1;
+      }
+      50.01%,
+      100% {
+         opacity: 0;
+      }
+   }
+}

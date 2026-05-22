@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+   <meta charset="UTF-8" />
+   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+   <title>capturing…</title>
+   <style>
+      html,
+      body {
+         margin: 0;
+         padding: 0;
+         width: 100vw;
+         height: 100vh;
+         background: #000;
+         overflow: hidden;
+         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         color: #e7e9ee;
+      }
+
+      .capture-root {
+         position: fixed;
+         inset: 0;
+         display: grid;
+         place-items: center;
+         background: #000;
+      }
+
+      .capture-frame {
+         border: 0;
+         display: block;
+         background: #000;
+         box-shadow: 0 0 0 1px #111 inset;
+      }
+
+      /* A single pixel of state data the outside world can read via title. */
+      .capture-status {
+         position: fixed;
+         left: 8px;
+         bottom: 6px;
+         font-size: 11px;
+         line-height: 1.3;
+         color: #6b7080;
+         padding: 4px 8px;
+         background: rgba(0, 0, 0, 0.65);
+         border: 1px solid #1b1e25;
+         border-radius: 2px;
+         letter-spacing: 0.02em;
+         pointer-events: none;
+         z-index: 9999;
+      }
+
+      .capture-status[data-state="ready"] {
+         color: #7ee07e;
+         border-color: #1e4a1e;
+      }
+
+      .capture-status[data-state="error"] {
+         color: #ff7a7a;
+         border-color: #4a1e1e;
+      }
+
+      /* Allow ?chromeless=1 to hide the status pill for clean screenshots. */
+      body[data-chromeless="1"] .capture-status {
+         display: none;
+      }
+   </style>
+</head>
+
+<body>
+   <div class="capture-root" id="capture-root">
+      <iframe id="capture-frame" class="capture-frame" referrerpolicy="no-referrer"></iframe>
+   </div>
+   <div class="capture-status" id="capture-status" data-state="loading">
+      loading…
+   </div>
+   <script type="module">
+      /**
+       * capture.html — deterministic single-frame renderer.
+       *
+       * Usage:
+       *   /capture.html?id=<animation-id>&t=<seconds>
+       *
+       * Optional params:
+       *   w, h         — override frame dimensions (default: animation's
+       *                  registered frameWidth / frameHeight).
+       *   chromeless=1 — hide the status pill for clean screenshots.
+       *   fit=contain  — scale the frame to fit the viewport while keeping
+       *                  its aspect ratio (default: render at native size).
+       *   fit=fill     — stretch to fill viewport, breaking aspect ratio.
+       *
+       * When the animation has been booted, seeked to the requested time,
+       * and a fresh render frame has rendered, we set:
+       *   document.title = "READY | <id> @ <t>s"
+       *   status pill data-state = "ready"
+       *   window.__LF_CAPTURE_READY = true
+       * So an external screenshotter (headless browser, Playwright, MCP)
+       * can poll any of those signals before taking a shot.
+       */
+      import { animations } from "/src/registry.ts";
+
+      const qs = new URLSearchParams(location.search);
+      const id = qs.get("id") ?? animations[0]?.id ?? "";
+      const t = Number(qs.get("t") ?? "0");
+      const entry = animations.find((a) => a.id === id);
+      const frameW = Number(qs.get("w") ?? entry?.frameWidth ?? 1280);
+      const frameH = Number(qs.get("h") ?? entry?.frameHeight ?? 800);
+      const chromeless = qs.get("chromeless") === "1";
+      const fit = qs.get("fit") ?? "native";
+
+      if (chromeless) document.body.dataset.chromeless = "1";
+      const statusEl = document.getElementById("capture-status");
+      const setStatus = (state, text) => {
+         statusEl.dataset.state = state;
+         statusEl.textContent = text;
+      };
+      setStatus("loading", `loading ${id} @ ${t.toFixed(2)}s`);
+
+      if (!entry) {
+         setStatus("error", `unknown animation: ${id}`);
+         document.title = `ERROR | unknown animation ${id}`;
+         throw new Error(`unknown animation: ${id}`);
+      }
+
+      const frame = document.getElementById("capture-frame");
+      frame.width = frameW;
+      frame.height = frameH;
+      frame.style.width = `${frameW}px`;
+      frame.style.height = `${frameH}px`;
+
+      if (fit === "contain" || fit === "fill") {
+         const apply = () => {
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            if (fit === "fill") {
+               frame.style.transform = `scale(${vw / frameW}, ${vh / frameH})`;
+            } else {
+               const s = Math.min(vw / frameW, vh / frameH);
+               frame.style.transform = `scale(${s})`;
+            }
+            frame.style.transformOrigin = "center center";
+         };
+         apply();
+         window.addEventListener("resize", apply);
+      }
+
+      frame.src = `/run/${encodeURIComponent(id)}.html?cap=1&_=${Date.now()}`;
+
+      /**
+       * Wait for the iframe to boot, then pause + seek to t. We listen for
+       * the `lf-ready` postMessage emitted by boot.ts. As a belt-and-
+       * suspenders fallback, we also poll window.lfTimeline.
+       */
+      const ready = new Promise((resolve, reject) => {
+         let settled = false;
+         const settle = (ok, why) => {
+            if (settled) return;
+            settled = true;
+            ok ? resolve() : reject(new Error(why));
+         };
+         const onMessage = (e) => {
+            if (e.source !== frame.contentWindow) return;
+            if (e.data?.type === "lf-ready" && e.data?.id === id) {
+               window.removeEventListener("message", onMessage);
+               settle(true);
+            }
+         };
+         window.addEventListener("message", onMessage);
+
+         const start = performance.now();
+         const poll = () => {
+            if (settled) return;
+            try {
+               const w = frame.contentWindow;
+               if (w && typeof w.lfTimeline !== "undefined" && w.lfTimeline) {
+                  settle(true);
+                  return;
+               }
+            } catch (_) {
+               /* cross-origin during navigation, ignore */
+            }
+            if (performance.now() - start > 15000) {
+               settle(false, "timeout waiting for lf-ready");
+               return;
+            }
+            setTimeout(poll, 50);
+         };
+         poll();
+      });
+
+      const tick = () =>
+         new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+      async function run() {
+         await ready;
+         const w = frame.contentWindow;
+         if (!w) throw new Error("iframe window gone");
+
+         // Wait a beat so `build()` has actually finished, then pause, seek,
+         // render one frame. We render twice — once to apply the seek, once
+         // to pick up any onUpdate-driven state (e.g. three.js camera.lookAt).
+         await tick();
+         if (typeof w.lfPause === "function") w.lfPause();
+         const clamped =
+            typeof w.lfSeek === "function"
+               ? w.lfSeek(t)
+               : typeof w.lfProgress === "function" && typeof w.lfDuration === "function"
+                  ? (w.lfProgress(t / Math.max(1e-6, w.lfDuration())), t)
+                  : t;
+         await tick();
+         // If the animation has a three.js env, the render loop is driven
+         // by rAF continuously — seeking a paused timeline doesn't always
+         // re-run onUpdate callbacks for tweens past the playhead. One more
+         // pause + seek + tick reliably lands a clean frame.
+         if (typeof w.lfSeek === "function") w.lfSeek(clamped);
+         await tick();
+
+         window.__LF_CAPTURE_READY = true;
+         document.title = `READY | ${id} @ ${clamped.toFixed(2)}s`;
+         setStatus("ready", `ready · ${id} @ ${clamped.toFixed(2)}s`);
+      }
+
+      run().catch((err) => {
+         console.error("[capture]", err);
+         document.title = `ERROR | ${err.message}`;
+         setStatus("error", err.message);
+      });
+   </script>
+</body>
+
+</html>

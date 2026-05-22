@@ -1,0 +1,12 @@
+node_modules
+.DS_Store
+dist
+out
+build
+.env
+*.log
+*.tsbuildinfo
+.analysis
+.captures
+__pycache__
+.cursor
